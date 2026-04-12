@@ -1,89 +1,78 @@
-# Telegram → LinkedIn (No Server, GitHub Actions)
+# Telegram → LinkedIn (Serverless via GitHub Actions)
 
-Cross-post Telegram channel to LinkedIn — **without servers, hosting, or payments**.  
-Runs entirely on **GitHub Actions (free tier)**.
+Cross-post from a Telegram channel to your LinkedIn profile with **zero infrastructure**.  
+Runs entirely on **GitHub Actions** (free tier).
 
 ---
 
 ## TL;DR
 
-- ⏱ Runs on schedule (cron, default: every hour)
-- 💸 $0 cost (GitHub Actions free tier)
+- ⏱ Cron-based (default: every hour)
+- 💸 $0 hosting cost
 - ⚙️ Setup: ~10–15 minutes
-- 📸 Supports text + single image posts
-- 🔁 No duplicates (stateful)
+- 📸 Text + single image supported
+- 🔁 Idempotent (no duplicate posts)
 
-👉 Fork → set secrets → done
-
----
-
-## Why
-
-Most solutions require:
-- VPS / server
-- always-on process
-- monitoring + payments
-
-This project removes all of that:
-
-→ GitHub Actions runs everything  
-→ no infrastructure needed  
-→ no monthly cost  
+👉 Fork → configure secrets → done
 
 ---
 
-## How It Works
+## Why this exists
 
-Telegram Channel → GitHub Actions (cron) → LinkedIn Profile  
-                         ↓  
-                 last_message_id (state)
+Typical solutions:
+- require a VPS
+- run persistent workers
+- cost money and need maintenance
 
-1. GitHub Actions runs `index.js` on schedule  
-2. Script fetches new Telegram posts  
-3. Uploads image (if present) to LinkedIn  
-4. Publishes post  
-5. Saves last processed message ID  
+This project:
+- uses GitHub Actions as a scheduler
+- runs stateless jobs
+- persists minimal state (last message id)
+- avoids infrastructure entirely
 
 ---
 
-## Quick Start (10–15 min)
+## How it works
 
-1. **Fork this repo**
+1. Action runs on schedule  
+2. Script fetches Telegram updates  
+3. Filters new posts from your channel  
+4. Uploads media (if exists) to LinkedIn  
+5. Creates a post  
+6. Stores last processed message ID  
 
-2. **Create Telegram bot**
-   - Open https://t.me/BotFather
-   - /newbot → get token
-   - Add bot to your channel as admin
+---
 
-3. **Run local auth helper**
-   ```bash
-   git clone https://github.com/KeeGooRoomiE/keebotroomie.git
-   cd keebotroomie
-   npm install
-   ```
+## Quick Start
 
-4. Create `.env`
-   ```env
-   TELEGRAM_BOT_TOKEN=your_bot_token
-   LINKEDIN_CLIENT_ID=your_client_id
-   LINKEDIN_CLIENT_SECRET=your_client_secret
-   LINKEDIN_REDIRECT_URI=http://localhost:3000/callback
-   ```
+### 1. Fork repository
 
-5. Run:
-   ```bash
-   node auth.js
-   ```
+### 2. Create Telegram bot
+- Use @BotFather
+- Get token
+- Add bot as **admin** to your channel
 
-6. In browser:
-   - Authorize LinkedIn → get LINKEDIN_ACCESS_TOKEN
-   - Get Telegram Chat ID → get TELEGRAM_ADMIN_ID
+### 3. Get credentials
 
-7. **Add GitHub Secrets**
+Run locally:
 
-Go to: Settings → Secrets and variables → Actions
+```bash
+git clone <your-fork>
+cd keebotroomie
+npm install
+node auth.js
+```
 
-Add:
+You will get:
+- TELEGRAM_ADMIN_ID
+- LINKEDIN_ACCESS_TOKEN
+- LINKEDIN_PERSON_URN
+
+---
+
+### 4. Configure GitHub Secrets
+
+Add in repo settings:
 
 - TELEGRAM_BOT_TOKEN
 - TELEGRAM_ADMIN_ID
@@ -91,9 +80,11 @@ Add:
 - LINKEDIN_ACCESS_TOKEN
 - LINKEDIN_PERSON_URN
 
-8. **Enable Actions**
-   - Go to Actions tab
-   - Run workflow manually once
+---
+
+### 5. Enable Actions
+
+Run workflow once manually.
 
 Done.
 
@@ -101,66 +92,50 @@ Done.
 
 ## Configuration
 
-Edit `.github/workflows/post-to-linkedin.yml`
+Edit cron in:
+
+.github/workflows/post-to-linkedin.yml
 
 Examples:
-
-- every hour: `0 * * * *`
+- hourly: `0 * * * *`
 - every 30 min: `*/30 * * * *`
-- every 3 hours: `0 */3 * * *`
 
 ---
 
 ## Features
 
-- 🔄 Scheduled sync via GitHub Actions  
-- 📸 Image support (single image)  
-- 🔁 No duplicates (state tracking)  
-- 🔒 Channel whitelist  
-- 🚨 Admin notifications  
-- 🆓 Fully free hosting  
+- Serverless architecture
+- No duplicate posts
+- Admin notifications
+- Token validation
+- Channel whitelist
 
 ---
 
 ## Limitations
 
-- Only 1 image per post
-- No videos or documents
-- Not real-time (cron-based)
+- Only 1 image supported
+- No videos/documents
+- Not real-time
 - LinkedIn token expires (~60 days)
-
----
-
-## Maintenance
-
-Token expired?
-
-1. Run:
-   ```bash
-   node auth.js
-   ```
-2. Reauthorize LinkedIn  
-3. Update LINKEDIN_ACCESS_TOKEN  
 
 ---
 
 ## Troubleshooting
 
-Nothing posts?
-
-- Check Actions logs  
-- Verify secrets  
-- Ensure bot is admin  
-- Check TARGET_CHANNEL_ID format  
+- Check Actions logs
+- Verify secrets
+- Ensure bot has admin rights
+- Validate channel ID format (-100...)
 
 ---
 
 ## Architecture
 
-- index.js — main logic
+- index.js — sync logic
 - auth.js — OAuth helper
-- last_message_id.txt — state
-- .github/workflows — cron
+- GitHub Actions — scheduler
+- last_message_id — state
 
 ---
 
