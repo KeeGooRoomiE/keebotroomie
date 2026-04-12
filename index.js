@@ -56,6 +56,8 @@ function cleanText(text) {
     let cleaned = text.replace(/<[^>]*>?/gm, '');
     // Remove Markdown symbols like *, _, `, [text](url)
     cleaned = cleaned.replace(/(\*|_|`|\[|\]|\(|\))/g, '');
+    // Remove extra spaces and newlines for better comparison
+    cleaned = cleaned.replace(/\s+/g, ' ');
     return cleaned.trim();
 }
 
@@ -106,10 +108,15 @@ async function uploadImageBinary(uploadUrl, imageBuffer) {
     });
 }
 
+/**
+ * Checks if a post with similar text already exists in the user's LinkedIn feed.
+ * This is a safety measure against GitHub Actions cache failures.
+ */
 async function isDuplicateOnLinkedIn(text) {
     if (!text) return false;
     try {
-        const response = await axios.get(`https://api.linkedin.com/v2/ugcPosts?q=author&author=${encodeURIComponent(LINKEDIN_PERSON_URN)}&count=10`, {
+        // Fetch last 15 posts from the user to be safe
+        const response = await axios.get(`https://api.linkedin.com/v2/ugcPosts?q=author&author=${encodeURIComponent(LINKEDIN_PERSON_URN)}&count=15`, {
             headers: {
                 'Authorization': `Bearer ${LINKEDIN_ACCESS_TOKEN}`,
                 'X-Restli-Protocol-Version': '2.0.0'
@@ -122,8 +129,12 @@ async function isDuplicateOnLinkedIn(text) {
         for (const post of posts) {
             const shareContent = post.specificContent['com.linkedin.ugc.ShareContent'];
             if (shareContent && shareContent.shareCommentary && shareContent.shareCommentary.text) {
+                // IMPORTANT: Clean the text from LinkedIn as well before comparing
                 const existingText = cleanText(shareContent.shareCommentary.text).substring(0, 100);
-                if (existingText === compareText) return true;
+                if (existingText === compareText) {
+                    console.log(`Match found: "${existingText}" === "${compareText}"`);
+                    return true;
+                }
             }
         }
         return false;
@@ -226,7 +237,6 @@ async function run() {
             if (post.photo) {
                 groups[groupId].photos.push(post.photo[post.photo.length - 1].file_id);
             }
-            // If multiple messages in a group have text, we take the first one (standard TG behavior)
             if (!groups[groupId].text && (post.text || post.caption)) {
                 groups[groupId].text = post.text || post.caption;
             }
@@ -239,7 +249,7 @@ async function run() {
                 console.log(`Images: ${group.photos.length}`);
 
                 if (await isDuplicateOnLinkedIn(group.text)) {
-                    console.log('Duplicate found on LinkedIn. Skipping.');
+                    console.log('Duplicate found on LinkedIn (after symmetric cleaning). Skipping.');
                     saveLastProcessedId(group.message_id);
                     return;
                 }
