@@ -1,0 +1,49 @@
+name: Sync Telegram to LinkedIn
+
+on:
+  schedule:
+    # Runs every hour (at minute 0)
+    - cron: '0 * * * *'
+  workflow_dispatch: # Allows manual run
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Restore last processed ID
+        id: cache-id
+        uses: actions/cache@v3
+        with:
+          path: last_message_id.txt
+          key: last-processed-id-${{ github.run_id }}
+          restore-keys: |
+            last-processed-id-
+
+      - name: Run sync script
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ADMIN_ID: ${{ secrets.TELEGRAM_ADMIN_ID }}
+          LINKEDIN_ACCESS_TOKEN: ${{ secrets.LINKEDIN_ACCESS_TOKEN }}
+          LINKEDIN_PERSON_URN: ${{ secrets.LINKEDIN_PERSON_URN }}
+          TARGET_CHANNEL_ID: ${{ secrets.TARGET_CHANNEL_ID }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: node index.js
+
+      - name: Save last processed ID
+        if: always()
+        uses: actions/cache@v3
+        with:
+          path: last_message_id.txt
+          key: last-processed-id-${{ github.run_id }}
