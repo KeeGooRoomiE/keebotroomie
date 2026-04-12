@@ -85,6 +85,40 @@ async function uploadImageBinary(uploadUrl, imageBuffer) {
     });
 }
 
+/**
+ * Checks if a post with similar text already exists in the user's LinkedIn feed.
+ * This is a safety measure against GitHub Actions cache failures.
+ */
+async function isDuplicateOnLinkedIn(text) {
+    if (!text) return false;
+    try {
+        // Fetch last 10 posts from the user
+        const response = await axios.get(`https://api.linkedin.com/v2/ugcPosts?q=author&author=${encodeURIComponent(LINKEDIN_PERSON_URN)}&count=10`, {
+            headers: {
+                'Authorization': `Bearer ${LINKEDIN_ACCESS_TOKEN}`,
+                'X-Restli-Protocol-Version': '2.0.0'
+            }
+        });
+
+        const posts = response.data.elements || [];
+        const cleanText = text.trim().substring(0, 100); // Compare first 100 chars
+
+        for (const post of posts) {
+            const shareContent = post.specificContent['com.linkedin.ugc.ShareContent'];
+            if (shareContent && shareContent.shareCommentary && shareContent.shareCommentary.text) {
+                const existingText = shareContent.shareCommentary.text.trim().substring(0, 100);
+                if (existingText === cleanText) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    } catch (error) {
+        console.error('Error checking LinkedIn history:', error.message);
+        return false; // If check fails, assume not a duplicate to avoid blocking
+    }
+}
+
 async function createLinkedInPost(text, assetUrn) {
     const postData = {
         author: LINKEDIN_PERSON_URN,
@@ -115,13 +149,12 @@ async function createLinkedInPost(text, assetUrn) {
                 'X-Restli-Protocol-Version': '2.0.0'
             }
         });
-        // Return the post URN (ID)
         return response.data.id;
     } catch (error) {
         const errorData = error.response ? error.response.data : { message: error.message };
         
         if (error.response && error.response.status === 422 && JSON.stringify(errorData).includes('DUPLICATE_POST')) {
-            console.log('LinkedIn detected a duplicate post. Skipping...');
+            console.log('LinkedIn API detected a duplicate post. Skipping...');
             return 'DUPLICATE';
         }
 
@@ -177,6 +210,16 @@ async function run() {
             console.log(`Processing message ID: ${post.message_id}`);
             
             let text = post.text || post.caption || '';
+            
+            // NEW: Check LinkedIn history before doing anything
+            console.log('Checking LinkedIn history for duplicates...');
+            const isDuplicate = await isDuplicateOnLinkedIn(text);
+            if (isDuplicate) {
+                console.log(`Post "${text.substring(0, 30)}..." already exists on LinkedIn. Skipping.`);
+                saveLastProcessedId(post.message_id);
+                continue;
+            }
+
             let assetUrn = null;
 
             try {
@@ -197,13 +240,11 @@ async function run() {
                 const linkedinPostUrn = await createLinkedInPost(text, assetUrn);
                 
                 if (linkedinPostUrn === 'DUPLICATE') {
-                    console.log('Successfully skipped duplicate!');
+                    console.log('Successfully skipped duplicate (API level)!');
                 } else {
                     console.log('Successfully processed message!');
                     
-                    // Generate links for notification
                     const tgLink = post.chat.username ? `https://t.me/${post.chat.username}/${post.message_id}` : 'N/A';
-                    // LinkedIn post link format: https://www.linkedin.com/feed/update/urn:li:share:ID
                     const liId = linkedinPostUrn.split(':').pop();
                     const liLink = `https://www.linkedin.com/feed/update/urn:li:share:${liId}`;
 
