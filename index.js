@@ -19,7 +19,8 @@ async function sendAdminNotification(message) {
         await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
             chat_id: TELEGRAM_ADMIN_ID,
             text: message,
-            parse_mode: 'HTML'
+            parse_mode: 'HTML',
+            disable_web_page_preview: false
         });
     } catch (error) {
         console.error('Failed to send admin notification:', error.message);
@@ -108,16 +109,24 @@ async function createLinkedInPost(text, assetUrn) {
     };
 
     try {
-        await axios.post('https://api.linkedin.com/v2/ugcPosts', postData, {
+        const response = await axios.post('https://api.linkedin.com/v2/ugcPosts', postData, {
             headers: {
                 'Authorization': `Bearer ${LINKEDIN_ACCESS_TOKEN}`,
                 'X-Restli-Protocol-Version': '2.0.0'
             }
         });
+        // Return the post URN (ID)
+        return response.data.id;
     } catch (error) {
-        const errorData = error.response ? JSON.stringify(error.response.data) : error.message;
-        console.error('LinkedIn Post Error Details:', errorData);
-        throw new Error(`LinkedIn API Error: ${errorData}`);
+        const errorData = error.response ? error.response.data : { message: error.message };
+        
+        if (error.response && error.response.status === 422 && JSON.stringify(errorData).includes('DUPLICATE_POST')) {
+            console.log('LinkedIn detected a duplicate post. Skipping...');
+            return 'DUPLICATE';
+        }
+
+        console.error('LinkedIn Post Error Details:', JSON.stringify(errorData));
+        throw new Error(`LinkedIn API Error: ${JSON.stringify(errorData)}`);
     }
 }
 
@@ -185,14 +194,26 @@ async function run() {
                 }
 
                 console.log('Creating LinkedIn post...');
-                await createLinkedInPost(text, assetUrn);
-                console.log('Successfully posted to LinkedIn!');
+                const linkedinPostUrn = await createLinkedInPost(text, assetUrn);
+                
+                if (linkedinPostUrn === 'DUPLICATE') {
+                    console.log('Successfully skipped duplicate!');
+                } else {
+                    console.log('Successfully processed message!');
+                    
+                    // Generate links for notification
+                    const tgLink = post.chat.username ? `https://t.me/${post.chat.username}/${post.message_id}` : 'N/A';
+                    // LinkedIn post link format: https://www.linkedin.com/feed/update/urn:li:share:ID
+                    const liId = linkedinPostUrn.split(':').pop();
+                    const liLink = `https://www.linkedin.com/feed/update/urn:li:share:${liId}`;
+
+                    await sendAdminNotification(`✅ <b>Пост успешно опубликован!</b>\n\n🔗 <a href="${tgLink}">Telegram</a>\n🔗 <a href="${liLink}">LinkedIn</a>`);
+                }
                 
                 saveLastProcessedId(post.message_id);
             } catch (err) {
                 console.error(`Failed to process message ${post.message_id}:`, err.message);
                 await sendAdminNotification(`❌ <b>Error processing message ${post.message_id}</b>\n\n<code>${err.message}</code>`);
-                // We don't save ID here so it can be retried next time
             }
         }
     } catch (error) {
