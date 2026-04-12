@@ -6,14 +6,13 @@ const path = require('path');
 dotenv.config();
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const TELEGRAM_ADMIN_ID = process.env.TELEGRAM_ADMIN_ID; // Your personal ID for notifications
+const TELEGRAM_ADMIN_ID = process.env.TELEGRAM_ADMIN_ID;
 const LINKEDIN_ACCESS_TOKEN = process.env.LINKEDIN_ACCESS_TOKEN;
 const LINKEDIN_PERSON_URN = process.env.LINKEDIN_PERSON_URN;
 const TARGET_CHANNEL_ID = process.env.TARGET_CHANNEL_ID;
 const REPO_URL = process.env.REPO_URL || 'https://github.com/your-username/your-repo';
 const STATE_FILE = 'last_message_id.txt';
 
-// Helper to send notification to admin
 async function sendAdminNotification(message) {
     if (!TELEGRAM_ADMIN_ID || !TELEGRAM_BOT_TOKEN) return;
     try {
@@ -27,7 +26,6 @@ async function sendAdminNotification(message) {
     }
 }
 
-// Helper to get last processed message ID
 function getLastProcessedId() {
     if (fs.existsSync(STATE_FILE)) {
         return parseInt(fs.readFileSync(STATE_FILE, 'utf8').trim());
@@ -35,7 +33,6 @@ function getLastProcessedId() {
     return 0;
 }
 
-// Helper to save last processed message ID
 function saveLastProcessedId(id) {
     fs.writeFileSync(STATE_FILE, id.toString());
 }
@@ -110,17 +107,22 @@ async function createLinkedInPost(text, assetUrn) {
         }
     };
 
-    await axios.post('https://api.linkedin.com/v2/ugcPosts', postData, {
-        headers: {
-            'Authorization': `Bearer ${LINKEDIN_ACCESS_TOKEN}`,
-            'X-Restli-Protocol-Version': '2.0.0'
-        }
-    });
+    try {
+        await axios.post('https://api.linkedin.com/v2/ugcPosts', postData, {
+            headers: {
+                'Authorization': `Bearer ${LINKEDIN_ACCESS_TOKEN}`,
+                'X-Restli-Protocol-Version': '2.0.0'
+            }
+        });
+    } catch (error) {
+        const errorData = error.response ? JSON.stringify(error.response.data) : error.message;
+        console.error('LinkedIn Post Error Details:', errorData);
+        throw new Error(`LinkedIn API Error: ${errorData}`);
+    }
 }
 
 async function checkLinkedInToken() {
     try {
-        // Simple call to check if token is still valid
         await axios.get('https://api.linkedin.com/v2/userinfo', {
             headers: { 'Authorization': `Bearer ${LINKEDIN_ACCESS_TOKEN}` }
         });
@@ -128,7 +130,7 @@ async function checkLinkedInToken() {
     } catch (error) {
         if (error.response && (error.response.status === 401 || error.response.status === 403)) {
             console.error('LinkedIn Token is invalid or expired!');
-            await sendAdminNotification(`⚠️ <b>LinkedIn Token Expired!</b>\n\nYour LinkedIn access token is no longer valid. The bot cannot post.\n\n1. Run <code>auth.js</code> locally.\n2. Update <b>LINKEDIN_ACCESS_TOKEN</b> in your GitHub Secrets.\n\nRepo: ${REPO_URL}`);
+            await sendAdminNotification(`⚠️ <b>LinkedIn Token Expired!</b>\n\nYour LinkedIn access token is no longer valid.\n\nRepo: ${REPO_URL}`);
             return false;
         }
         throw error;
@@ -138,7 +140,6 @@ async function checkLinkedInToken() {
 async function run() {
     console.log('Starting sync process...');
     
-    // 1. Check token health
     const isTokenValid = await checkLinkedInToken();
     if (!isTokenValid) process.exit(1);
 
@@ -169,28 +170,34 @@ async function run() {
             let text = post.text || post.caption || '';
             let assetUrn = null;
 
-            if (post.photo) {
-                const photo = post.photo[post.photo.length - 1];
-                const imageBuffer = await downloadFile(photo.file_id);
+            try {
+                if (post.photo) {
+                    const photo = post.photo[post.photo.length - 1];
+                    const imageBuffer = await downloadFile(photo.file_id);
+                    
+                    console.log('Registering LinkedIn image...');
+                    const uploadInfo = await registerImageUpload();
+                    const uploadUrl = uploadInfo.uploadMechanism['com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest'].uploadUrl;
+                    assetUrn = uploadInfo.asset;
+
+                    console.log('Uploading image binary...');
+                    await uploadImageBinary(uploadUrl, imageBuffer);
+                }
+
+                console.log('Creating LinkedIn post...');
+                await createLinkedInPost(text, assetUrn);
+                console.log('Successfully posted to LinkedIn!');
                 
-                console.log('Registering LinkedIn image...');
-                const uploadInfo = await registerImageUpload();
-                const uploadUrl = uploadInfo.uploadMechanism['com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest'].uploadUrl;
-                assetUrn = uploadInfo.asset;
-
-                console.log('Uploading image binary...');
-                await uploadImageBinary(uploadUrl, imageBuffer);
+                saveLastProcessedId(post.message_id);
+            } catch (err) {
+                console.error(`Failed to process message ${post.message_id}:`, err.message);
+                await sendAdminNotification(`❌ <b>Error processing message ${post.message_id}</b>\n\n<code>${err.message}</code>`);
+                // We don't save ID here so it can be retried next time
             }
-
-            console.log('Creating LinkedIn post...');
-            await createLinkedInPost(text, assetUrn);
-            console.log('Successfully posted to LinkedIn!');
-
-            saveLastProcessedId(post.message_id);
         }
     } catch (error) {
-        console.error('Error during sync:', error.response ? error.response.data : error.message);
-        await sendAdminNotification(`❌ <b>Sync Error!</b>\n\nAn error occurred while syncing posts: <code>${error.message}</code>\n\nCheck GitHub Actions logs for details.`);
+        console.error('Error during sync:', error.message);
+        await sendAdminNotification(`❌ <b>Sync Error!</b>\n\n<code>${error.message}</code>`);
         process.exit(1);
     }
 }
