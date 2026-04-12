@@ -302,7 +302,7 @@ Built with:
 1. Создайте **приватный** репозиторий.
 2. Загрузите файлы проекта (без `node_modules` и `.env`).
 3. Добавьте секреты в **Settings -> Secrets and variables -> Actions**:
-   * `TELEGRAM_BOT_TOKEN`: `8500165320:AAGzf367TZijOjLdX61irZRTc3JSYwAD5Zc`
+   * `TELEGRAM_BOT_TOKEN`: Ваш Bot Token
    * `TELEGRAM_ADMIN_ID`: Ваш ID (полученный в шаге 1).
    * `LINKEDIN_ACCESS_TOKEN`: Ваш токен.
    * `LINKEDIN_PERSON_URN`: Ваш URN.
