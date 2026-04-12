@@ -38,7 +38,8 @@ async function sendAdminNotification(message) {
 
 function getLastProcessedId() {
     if (fs.existsSync(STATE_FILE)) {
-        return parseInt(fs.readFileSync(STATE_FILE, 'utf8').trim());
+        const content = fs.readFileSync(STATE_FILE, 'utf8').trim();
+        return content ? parseInt(content) : 0;
     }
     return 0;
 }
@@ -48,17 +49,19 @@ function saveLastProcessedId(id) {
 }
 
 /**
- * Cleans Telegram Markdown/HTML tags for LinkedIn compatibility
+ * Super-aggressive text cleaning for reliable comparison.
+ * Removes all non-alphanumeric characters, emojis, and extra spaces.
  */
-function cleanText(text) {
+function superClean(text) {
     if (!text) return '';
-    // Remove HTML tags like <b>, <i>, <a> etc.
+    // Remove HTML tags
     let cleaned = text.replace(/<[^>]*>?/gm, '');
-    // Remove Markdown symbols like *, _, `, [text](url)
-    cleaned = cleaned.replace(/(\*|_|`|\[|\]|\(|\))/g, '');
-    // Remove extra spaces and newlines for better comparison
-    cleaned = cleaned.replace(/\s+/g, ' ');
-    return cleaned.trim();
+    // Convert to lowercase
+    cleaned = cleaned.toLowerCase();
+    // Remove all non-alphanumeric characters (including emojis, punctuation, etc.)
+    // Keeps only letters and numbers
+    cleaned = cleaned.replace(/[^a-z0-9а-яё]/gi, '');
+    return cleaned;
 }
 
 async function downloadFile(fileId) {
@@ -108,15 +111,10 @@ async function uploadImageBinary(uploadUrl, imageBuffer) {
     });
 }
 
-/**
- * Checks if a post with similar text already exists in the user's LinkedIn feed.
- * This is a safety measure against GitHub Actions cache failures.
- */
 async function isDuplicateOnLinkedIn(text) {
     if (!text) return false;
     try {
-        // Fetch last 15 posts from the user to be safe
-        const response = await axios.get(`https://api.linkedin.com/v2/ugcPosts?q=author&author=${encodeURIComponent(LINKEDIN_PERSON_URN)}&count=15`, {
+        const response = await axios.get(`https://api.linkedin.com/v2/ugcPosts?q=author&author=${encodeURIComponent(LINKEDIN_PERSON_URN)}&count=20`, {
             headers: {
                 'Authorization': `Bearer ${LINKEDIN_ACCESS_TOKEN}`,
                 'X-Restli-Protocol-Version': '2.0.0'
@@ -124,13 +122,12 @@ async function isDuplicateOnLinkedIn(text) {
         });
 
         const posts = response.data.elements || [];
-        const compareText = cleanText(text).substring(0, 100);
+        const compareText = superClean(text).substring(0, 100);
 
         for (const post of posts) {
             const shareContent = post.specificContent['com.linkedin.ugc.ShareContent'];
             if (shareContent && shareContent.shareCommentary && shareContent.shareCommentary.text) {
-                // IMPORTANT: Clean the text from LinkedIn as well before comparing
-                const existingText = cleanText(shareContent.shareCommentary.text).substring(0, 100);
+                const existingText = superClean(shareContent.shareCommentary.text).substring(0, 100);
                 if (existingText === compareText) {
                     console.log(`Match found: "${existingText}" === "${compareText}"`);
                     return true;
@@ -152,12 +149,15 @@ async function createLinkedInPost(text, assetUrns) {
         title: { text: 'Post Image' }
     }));
 
+    // Clean text for LinkedIn display (remove HTML/Markdown but keep spaces/emojis)
+    const displayText = text.replace(/<[^>]*>?/gm, '').replace(/(\*|_|`|\[|\]|\(|\))/g, '').trim();
+
     const postData = {
         author: LINKEDIN_PERSON_URN,
         lifecycleState: 'PUBLISHED',
         specificContent: {
             'com.linkedin.ugc.ShareContent': {
-                shareCommentary: { text: cleanText(text) || ' ' },
+                shareCommentary: { text: displayText || ' ' },
                 shareMediaCategory: media.length > 0 ? 'IMAGE' : 'NONE',
                 media: media
             }
@@ -205,9 +205,10 @@ async function run() {
     if (!isTokenValid) process.exit(1);
 
     const lastId = getLastProcessedId();
-    console.log(`Last processed message ID: ${lastId}`);
+    console.log(`Last processed message ID from file: ${lastId}`);
 
     try {
+        // We use offset = lastId + 1 to get only NEW messages
         const response = await axios.get(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=${lastId + 1}`);
         const updates = response.data.result;
 
@@ -221,6 +222,12 @@ async function run() {
         for (const update of updates) {
             const post = update.channel_post;
             if (!post) continue;
+
+            // CRITICAL: Strict ID check to prevent off-by-one errors
+            if (post.message_id <= lastId) {
+                console.log(`Skipping message ${post.message_id} because it is not newer than ${lastId}`);
+                continue;
+            }
 
             const chatUsername = post.chat.username ? `@${post.chat.username}` : post.chat.id.toString();
             if (chatUsername !== TARGET_CHANNEL_ID && post.chat.id.toString() !== TARGET_CHANNEL_ID) continue;
@@ -242,14 +249,29 @@ async function run() {
             }
         }
 
-        for (const groupId in groups) {
+        const groupIds = Object.keys(groups).sort((a, b) => groups[a].message_id - groups[b].message_id);
+
+        if (groupIds.length === 0) {
+            console.log('No new valid messages to process.');
+            return;
+        }
+
+        // If this is the FIRST run (lastId is 0), just save the latest ID and exit
+        if (lastId === 0) {
+            const latestId = groups[groupIds[groupIds.length - 1]].message_id;
+            console.log(`First run detected. Initializing state with ID: ${latestId}`);
+            saveLastProcessedId(latestId);
+            await sendAdminNotification(`🚀 <b>Бот инициализирован!</b>\n\nТочка отсчета установлена на ID: ${latestId}. Следующие посты будут синхронизированы.`);
+            return;
+        }
+
+        for (const groupId of groupIds) {
             const group = groups[groupId];
             await logGroup(`Processing Post ${group.message_id}`, async () => {
                 console.log(`Text: ${group.text.substring(0, 50)}...`);
-                console.log(`Images: ${group.photos.length}`);
-
+                
                 if (await isDuplicateOnLinkedIn(group.text)) {
-                    console.log('Duplicate found on LinkedIn (after symmetric cleaning). Skipping.');
+                    console.log('Duplicate found on LinkedIn (SuperClean). Skipping.');
                     saveLastProcessedId(group.message_id);
                     return;
                 }
