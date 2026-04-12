@@ -13,6 +13,15 @@ const TARGET_CHANNEL_ID = process.env.TARGET_CHANNEL_ID;
 const REPO_URL = process.env.REPO_URL || 'https://github.com/your-username/your-repo';
 const STATE_FILE = 'last_message_id.txt';
 
+/**
+ * Helper to group logs in GitHub Actions
+ */
+function logGroup(name, callback) {
+    console.log(`::group::${name}`);
+    callback();
+    console.log('::endgroup::');
+}
+
 async function sendAdminNotification(message) {
     if (!TELEGRAM_ADMIN_ID || !TELEGRAM_BOT_TOKEN) return;
     try {
@@ -36,6 +45,18 @@ function getLastProcessedId() {
 
 function saveLastProcessedId(id) {
     fs.writeFileSync(STATE_FILE, id.toString());
+}
+
+/**
+ * Cleans Telegram Markdown/HTML tags for LinkedIn compatibility
+ */
+function cleanText(text) {
+    if (!text) return '';
+    // Remove HTML tags like <b>, <i>, <a> etc.
+    let cleaned = text.replace(/<[^>]*>?/gm, '');
+    // Remove Markdown symbols like *, _, `, [text](url)
+    cleaned = cleaned.replace(/(\*|_|`|\[|\]|\(|\))/g, '');
+    return cleaned.trim();
 }
 
 async function downloadFile(fileId) {
@@ -85,14 +106,9 @@ async function uploadImageBinary(uploadUrl, imageBuffer) {
     });
 }
 
-/**
- * Checks if a post with similar text already exists in the user's LinkedIn feed.
- * This is a safety measure against GitHub Actions cache failures.
- */
 async function isDuplicateOnLinkedIn(text) {
     if (!text) return false;
     try {
-        // Fetch last 10 posts from the user
         const response = await axios.get(`https://api.linkedin.com/v2/ugcPosts?q=author&author=${encodeURIComponent(LINKEDIN_PERSON_URN)}&count=10`, {
             headers: {
                 'Authorization': `Bearer ${LINKEDIN_ACCESS_TOKEN}`,
@@ -101,40 +117,38 @@ async function isDuplicateOnLinkedIn(text) {
         });
 
         const posts = response.data.elements || [];
-        const cleanText = text.trim().substring(0, 100); // Compare first 100 chars
+        const compareText = cleanText(text).substring(0, 100);
 
         for (const post of posts) {
             const shareContent = post.specificContent['com.linkedin.ugc.ShareContent'];
             if (shareContent && shareContent.shareCommentary && shareContent.shareCommentary.text) {
-                const existingText = shareContent.shareCommentary.text.trim().substring(0, 100);
-                if (existingText === cleanText) {
-                    return true;
-                }
+                const existingText = cleanText(shareContent.shareCommentary.text).substring(0, 100);
+                if (existingText === compareText) return true;
             }
         }
         return false;
     } catch (error) {
         console.error('Error checking LinkedIn history:', error.message);
-        return false; // If check fails, assume not a duplicate to avoid blocking
+        return false;
     }
 }
 
-async function createLinkedInPost(text, assetUrn) {
+async function createLinkedInPost(text, assetUrns) {
+    const media = assetUrns.map(urn => ({
+        status: 'READY',
+        description: { text: 'Post Image' },
+        media: urn,
+        title: { text: 'Post Image' }
+    }));
+
     const postData = {
         author: LINKEDIN_PERSON_URN,
         lifecycleState: 'PUBLISHED',
         specificContent: {
             'com.linkedin.ugc.ShareContent': {
-                shareCommentary: { text: text || ' ' },
-                shareMediaCategory: assetUrn ? 'IMAGE' : 'NONE',
-                media: assetUrn ? [
-                    {
-                        status: 'READY',
-                        description: { text: 'Post Image' },
-                        media: assetUrn,
-                        title: { text: 'Post Image' }
-                    }
-                ] : []
+                shareCommentary: { text: cleanText(text) || ' ' },
+                shareMediaCategory: media.length > 0 ? 'IMAGE' : 'NONE',
+                media: media
             }
         },
         visibility: {
@@ -152,13 +166,9 @@ async function createLinkedInPost(text, assetUrn) {
         return response.data.id;
     } catch (error) {
         const errorData = error.response ? error.response.data : { message: error.message };
-        
         if (error.response && error.response.status === 422 && JSON.stringify(errorData).includes('DUPLICATE_POST')) {
-            console.log('LinkedIn API detected a duplicate post. Skipping...');
             return 'DUPLICATE';
         }
-
-        console.error('LinkedIn Post Error Details:', JSON.stringify(errorData));
         throw new Error(`LinkedIn API Error: ${JSON.stringify(errorData)}`);
     }
 }
@@ -171,8 +181,7 @@ async function checkLinkedInToken() {
         return true;
     } catch (error) {
         if (error.response && (error.response.status === 401 || error.response.status === 403)) {
-            console.error('LinkedIn Token is invalid or expired!');
-            await sendAdminNotification(`⚠️ <b>LinkedIn Token Expired!</b>\n\nYour LinkedIn access token is no longer valid.\n\nRepo: ${REPO_URL}`);
+            await sendAdminNotification(`⚠️ <b>LinkedIn Token Expired!</b>\n\nRepo: ${REPO_URL}`);
             return false;
         }
         throw error;
@@ -181,7 +190,6 @@ async function checkLinkedInToken() {
 
 async function run() {
     console.log('Starting sync process...');
-    
     const isTokenValid = await checkLinkedInToken();
     if (!isTokenValid) process.exit(1);
 
@@ -197,69 +205,71 @@ async function run() {
             return;
         }
 
+        // Grouping by media_group_id for albums
+        const groups = {};
         for (const update of updates) {
             const post = update.channel_post;
             if (!post) continue;
 
             const chatUsername = post.chat.username ? `@${post.chat.username}` : post.chat.id.toString();
-            if (chatUsername !== TARGET_CHANNEL_ID && post.chat.id.toString() !== TARGET_CHANNEL_ID) {
-                console.log(`Skipping post from unauthorized channel: ${chatUsername}`);
-                continue;
+            if (chatUsername !== TARGET_CHANNEL_ID && post.chat.id.toString() !== TARGET_CHANNEL_ID) continue;
+
+            const groupId = post.media_group_id || `single_${post.message_id}`;
+            if (!groups[groupId]) {
+                groups[groupId] = {
+                    message_id: post.message_id,
+                    text: post.text || post.caption || '',
+                    photos: [],
+                    chat_username: post.chat.username
+                };
             }
-
-            console.log(`Processing message ID: ${post.message_id}`);
-            
-            let text = post.text || post.caption || '';
-            
-            // NEW: Check LinkedIn history before doing anything
-            console.log('Checking LinkedIn history for duplicates...');
-            const isDuplicate = await isDuplicateOnLinkedIn(text);
-            if (isDuplicate) {
-                console.log(`Post "${text.substring(0, 30)}..." already exists on LinkedIn. Skipping.`);
-                saveLastProcessedId(post.message_id);
-                continue;
+            if (post.photo) {
+                groups[groupId].photos.push(post.photo[post.photo.length - 1].file_id);
             }
-
-            let assetUrn = null;
-
-            try {
-                if (post.photo) {
-                    const photo = post.photo[post.photo.length - 1];
-                    const imageBuffer = await downloadFile(photo.file_id);
-                    
-                    console.log('Registering LinkedIn image...');
-                    const uploadInfo = await registerImageUpload();
-                    const uploadUrl = uploadInfo.uploadMechanism['com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest'].uploadUrl;
-                    assetUrn = uploadInfo.asset;
-
-                    console.log('Uploading image binary...');
-                    await uploadImageBinary(uploadUrl, imageBuffer);
-                }
-
-                console.log('Creating LinkedIn post...');
-                const linkedinPostUrn = await createLinkedInPost(text, assetUrn);
-                
-                if (linkedinPostUrn === 'DUPLICATE') {
-                    console.log('Successfully skipped duplicate (API level)!');
-                } else {
-                    console.log('Successfully processed message!');
-                    
-                    const tgLink = post.chat.username ? `https://t.me/${post.chat.username}/${post.message_id}` : 'N/A';
-                    const liId = linkedinPostUrn.split(':').pop();
-                    const liLink = `https://www.linkedin.com/feed/update/urn:li:share:${liId}`;
-
-                    await sendAdminNotification(`✅ <b>Пост успешно опубликован!</b>\n\n🔗 <a href="${tgLink}">Telegram</a>\n🔗 <a href="${liLink}">LinkedIn</a>`);
-                }
-                
-                saveLastProcessedId(post.message_id);
-            } catch (err) {
-                console.error(`Failed to process message ${post.message_id}:`, err.message);
-                await sendAdminNotification(`❌ <b>Error processing message ${post.message_id}</b>\n\n<code>${err.message}</code>`);
+            // If multiple messages in a group have text, we take the first one (standard TG behavior)
+            if (!groups[groupId].text && (post.text || post.caption)) {
+                groups[groupId].text = post.text || post.caption;
             }
         }
+
+        for (const groupId in groups) {
+            const group = groups[groupId];
+            await logGroup(`Processing Post ${group.message_id}`, async () => {
+                console.log(`Text: ${group.text.substring(0, 50)}...`);
+                console.log(`Images: ${group.photos.length}`);
+
+                if (await isDuplicateOnLinkedIn(group.text)) {
+                    console.log('Duplicate found on LinkedIn. Skipping.');
+                    saveLastProcessedId(group.message_id);
+                    return;
+                }
+
+                try {
+                    const assetUrns = [];
+                    for (const fileId of group.photos) {
+                        console.log(`Uploading image ${fileId}...`);
+                        const imageBuffer = await downloadFile(fileId);
+                        const uploadInfo = await registerImageUpload();
+                        const uploadUrl = uploadInfo.uploadMechanism['com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest'].uploadUrl;
+                        await uploadImageBinary(uploadUrl, imageBuffer);
+                        assetUrns.push(uploadInfo.asset);
+                    }
+
+                    const linkedinPostUrn = await createLinkedInPost(group.text, assetUrns);
+                    if (linkedinPostUrn !== 'DUPLICATE') {
+                        const tgLink = group.chat_username ? `https://t.me/${group.chat_username}/${group.message_id}` : 'N/A';
+                        const liLink = `https://www.linkedin.com/feed/update/urn:li:share:${linkedinPostUrn.split(':').pop()}`;
+                        await sendAdminNotification(`✅ <b>Пост опубликован!</b>\n\n🔗 <a href="${tgLink}">Telegram</a>\n🔗 <a href="${liLink}">LinkedIn</a>`);
+                    }
+                    saveLastProcessedId(group.message_id);
+                } catch (err) {
+                    console.error('Error:', err.message);
+                    await sendAdminNotification(`❌ <b>Error Post ${group.message_id}</b>\n\n<code>${err.message}</code>`);
+                }
+            });
+        }
     } catch (error) {
-        console.error('Error during sync:', error.message);
-        await sendAdminNotification(`❌ <b>Sync Error!</b>\n\n<code>${error.message}</code>`);
+        console.error('Sync Error:', error.message);
         process.exit(1);
     }
 }
