@@ -53,8 +53,8 @@ jobs:
           echo "New state ID: $NEW_ID"
 
           # Pull latest remote state BEFORE committing to avoid conflicts
-          git fetch origin main
-          git reset --hard FETCH_HEAD
+          git fetch origin
+          git reset --hard origin/main
 
           # Re-write our new ID on top of fresh remote state
           echo "$NEW_ID" > last_message_id.txt
