@@ -5,6 +5,10 @@ on:
     - cron: '0 * * * *' # Runs every hour. Change to '*/30 * * * *' for every 30 mins.
   workflow_dispatch: # Allows manual trigger from GitHub Actions tab
 
+concurrency:
+  group: sync-job
+  cancel-in-progress: false
+
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -47,6 +51,7 @@ jobs:
               echo "No changes to last_message_id.txt"
             else
               git commit -m "chore: update last processed message ID [skip ci]"
+              git pull --rebase origin main || git pull --no-rebase origin main
               git push
               echo "State updated and pushed to repository."
             fi

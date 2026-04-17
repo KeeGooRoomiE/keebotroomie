@@ -16,9 +16,9 @@ const STATE_FILE = 'last_message_id.txt';
 /**
  * Helper to group logs in GitHub Actions
  */
-function logGroup(name, callback) {
+async function logGroup(name, callback) {
     console.log(`::group::${name}`);
-    callback();
+    await callback();
     console.log('::endgroup::');
 }
 
@@ -62,6 +62,19 @@ function superClean(text) {
     // Keeps only letters and numbers
     cleaned = cleaned.replace(/[^a-z0-9а-яё]/gi, '');
     return cleaned;
+}
+
+let _translationWarningShown = false;
+function getPostText(post) {
+    let text = post.text || post.caption || '';
+    if (!text && post.translation && post.translation.text) {
+        text = post.translation.text;
+        if (!_translationWarningShown) {
+            console.log(`[TRANSLATION] Telegram Premium auto-translate detected`);
+            _translationWarningShown = true;
+        }
+    }
+    return text;
 }
 
 async function downloadFile(fileId) {
@@ -236,7 +249,7 @@ async function run() {
             if (!groups[groupId]) {
                 groups[groupId] = {
                     message_id: post.message_id,
-                    text: post.text || post.caption || '',
+                    text: getPostText(post),
                     photos: [],
                     chat_username: post.chat.username
                 };
@@ -244,8 +257,8 @@ async function run() {
             if (post.photo) {
                 groups[groupId].photos.push(post.photo[post.photo.length - 1].file_id);
             }
-            if (!groups[groupId].text && (post.text || post.caption)) {
-                groups[groupId].text = post.text || post.caption;
+            if (!groups[groupId].text) {
+                groups[groupId].text = getPostText(post);
             }
         }
 
@@ -268,8 +281,16 @@ async function run() {
         for (const groupId of groupIds) {
             const group = groups[groupId];
             await logGroup(`Processing Post ${group.message_id}`, async () => {
-                console.log(`Text: ${group.text.substring(0, 50)}...`);
-                
+                console.log(`[DEBUG] Message ID: ${group.message_id}, Text length: ${group.text.length}, Photos: ${group.photos.length}`);
+                console.log(`[DEBUG] Text: "${group.text.substring(0, 100)}"`);
+
+                if (!group.text && group.photos.length === 0) {
+                    console.log('❌ Skipping post - no text and no photos');
+                    saveLastProcessedId(group.message_id);
+                    await sendAdminNotification(`⚠️ Пост ${group.message_id} пропущен - нет текста и фото`);
+                    return;
+                }
+
                 if (await isDuplicateOnLinkedIn(group.text)) {
                     console.log('Duplicate found on LinkedIn (SuperClean). Skipping.');
                     saveLastProcessedId(group.message_id);
