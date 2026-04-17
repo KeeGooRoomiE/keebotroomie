@@ -165,12 +165,16 @@ async function createLinkedInPost(text, assetUrns) {
     // Clean text for LinkedIn display (remove HTML/Markdown but keep spaces/emojis)
     const displayText = text.replace(/<[^>]*>?/gm, '').replace(/(\*|_|`|\[|\]|\(|\))/g, '').trim();
 
+    if (!displayText && media.length === 0) {
+        throw new Error('Empty post after text cleaning — skipping');
+    }
+
     const postData = {
         author: LINKEDIN_PERSON_URN,
         lifecycleState: 'PUBLISHED',
         specificContent: {
             'com.linkedin.ugc.ShareContent': {
-                shareCommentary: { text: displayText || ' ' },
+                shareCommentary: { text: displayText },
                 shareMediaCategory: media.length > 0 ? 'IMAGE' : 'NONE',
                 media: media
             }

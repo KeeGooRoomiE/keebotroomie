@@ -43,18 +43,27 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Check if last_message_id.txt exists and has changed
-          if [ -f last_message_id.txt ]; then
-            git add last_message_id.txt
-            if git diff --staged --quiet; then
-              echo "No changes to last_message_id.txt"
-            else
-              git commit -m "chore: update last processed message ID [skip ci]"
-              git pull --rebase origin main || git pull --no-rebase origin main
-              git push
-              echo "State updated and pushed to repository."
-            fi
-          else
+
+          if [ ! -f last_message_id.txt ]; then
             echo "last_message_id.txt not found, skipping commit."
+            exit 0
+          fi
+
+          NEW_ID=$(cat last_message_id.txt)
+          echo "New state ID: $NEW_ID"
+
+          # Pull latest remote state BEFORE committing to avoid conflicts
+          git fetch origin main
+          git reset --hard origin/main
+
+          # Re-write our new ID on top of fresh remote state
+          echo "$NEW_ID" > last_message_id.txt
+          git add last_message_id.txt
+
+          if git diff --staged --quiet; then
+            echo "No changes to last_message_id.txt"
+          else
+            git commit -m "chore: update last processed message ID [skip ci]"
+            git push
+            echo "State updated: $NEW_ID"
           fi
