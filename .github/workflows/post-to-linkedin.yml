@@ -64,6 +64,6 @@ jobs:
             echo "No changes to last_message_id.txt"
           else
             git commit -m "chore: update last processed message ID [skip ci]"
-            git push
+            git push --force
             echo "State updated: $NEW_ID"
           fi
