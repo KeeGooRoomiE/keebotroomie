@@ -1,0 +1,83 @@
+name: LinkedIn Token Refresh
+
+on:
+  workflow_dispatch:
+    inputs:
+      code:
+        description: 'Код из URL после авторизации (значение параметра code=...)'
+        required: true
+        type: string
+
+jobs:
+  refresh-token:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: none
+    steps:
+      - name: Exchange code for access token
+        id: token
+        env:
+          INPUT_CODE: ${{ github.event.inputs.code }}
+        run: |
+          RESPONSE=$(curl -s -X POST 'https://www.linkedin.com/oauth/v2/accessToken' \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            --data-urlencode 'grant_type=authorization_code' \
+            --data-urlencode "code=$INPUT_CODE" \
+            --data-urlencode 'redirect_uri=http://localhost:3000/callback' \
+            --data-urlencode 'client_id=${{ secrets.LINKEDIN_CLIENT_ID }}' \
+            --data-urlencode 'client_secret=${{ secrets.LINKEDIN_CLIENT_SECRET }}')
+
+          ACCESS_TOKEN=$(echo "$RESPONSE" | jq -r '.access_token')
+          EXPIRES_IN=$(echo "$RESPONSE" | jq -r '.expires_in')
+
+          if [ "$ACCESS_TOKEN" = "null" ] || [ -z "$ACCESS_TOKEN" ]; then
+            echo "❌ Ошибка обмена кода: $RESPONSE"
+            exit 1
+          fi
+
+          echo "::add-mask::$ACCESS_TOKEN"
+          echo "access_token=$ACCESS_TOKEN" >> $GITHUB_OUTPUT
+
+          if [[ "$EXPIRES_IN" =~ ^[0-9]+$ ]]; then
+            echo "expires_days=$(( EXPIRES_IN / 86400 ))" >> $GITHUB_OUTPUT
+          else
+            echo "expires_days=60" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get Person URN
+        id: profile
+        env:
+          ACCESS_TOKEN: ${{ steps.token.outputs.access_token }}
+        run: |
+          RESPONSE=$(curl -s 'https://api.linkedin.com/v2/userinfo' \
+            -H "Authorization: Bearer $ACCESS_TOKEN")
+
+          SUB=$(echo "$RESPONSE" | jq -r '.sub')
+
+          if [ "$SUB" = "null" ] || [ -z "$SUB" ]; then
+            echo "❌ Ошибка получения профиля: $RESPONSE"
+            exit 1
+          fi
+
+          echo "person_urn=urn:li:person:$SUB" >> $GITHUB_OUTPUT
+
+      - name: Update GitHub Secrets
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          ACCESS_TOKEN: ${{ steps.token.outputs.access_token }}
+          PERSON_URN: ${{ steps.profile.outputs.person_urn }}
+        run: |
+          echo "$ACCESS_TOKEN" | gh secret set LINKEDIN_ACCESS_TOKEN -R ${{ github.repository }}
+          echo "$PERSON_URN" | gh secret set LINKEDIN_PERSON_URN -R ${{ github.repository }}
+
+      - name: Send success notification
+        env:
+          EXPIRES_DAYS: ${{ steps.token.outputs.expires_days }}
+          PERSON_URN: ${{ steps.profile.outputs.person_urn }}
+        run: |
+          MESSAGE="✅ <b>LinkedIn токен обновлён!</b>%0A%0AДействует ещё <b>${EXPIRES_DAYS} дней</b>%0AURN: <code>${PERSON_URN}</code>"
+
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_ADMIN_ID }}" \
+            -d "text=$MESSAGE" \
+            -d "parse_mode=HTML"

@@ -1,0 +1,42 @@
+name: LinkedIn Token Monitor
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+jobs:
+  check-token:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: none
+    steps:
+      - name: Check LinkedIn token
+        id: check
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.LINKEDIN_ACCESS_TOKEN }}" \
+            'https://api.linkedin.com/v2/userinfo')
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          echo "Token check status: $STATUS"
+
+      - name: Send Telegram alert if token expired
+        if: steps.check.outputs.status == '401'
+        run: |
+          AUTH_URL="https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${{ secrets.LINKEDIN_CLIENT_ID }}&redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fcallback&scope=openid%20profile%20email%20w_member_social"
+          REFRESH_URL="https://github.com/${{ github.repository }}/actions/workflows/linkedin-token-refresh.yml"
+
+          MESSAGE=$(cat <<EOF
+⚠️ <b>LinkedIn токен истёк!</b>
+
+1️⃣ <a href="${AUTH_URL}">Авторизоваться в LinkedIn</a>
+
+2️⃣ Скопируй <code>code=...</code> из URL и запусти <a href="${REFRESH_URL}">Refresh workflow</a>
+EOF
+)
+
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            --data-urlencode "text=$MESSAGE" \
+            -d "chat_id=${{ secrets.TELEGRAM_ADMIN_ID }}" \
+            -d "parse_mode=HTML" \
+            -d "disable_web_page_preview=true"
