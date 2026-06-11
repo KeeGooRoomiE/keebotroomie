@@ -26,14 +26,7 @@ jobs:
           AUTH_URL="https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${{ secrets.LINKEDIN_CLIENT_ID }}&redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fcallback&scope=openid%20profile%20email%20w_member_social"
           REFRESH_URL="https://github.com/${{ github.repository }}/actions/workflows/linkedin-token-refresh.yml"
 
-          MESSAGE=$(cat <<EOF
-⚠️ <b>LinkedIn токен истёк!</b>
-
-1️⃣ <a href="${AUTH_URL}">Авторизоваться в LinkedIn</a>
-
-2️⃣ Скопируй <code>code=...</code> из URL и запусти <a href="${REFRESH_URL}">Refresh workflow</a>
-EOF
-)
+          MESSAGE=$(printf '⚠️ <b>LinkedIn токен истёк!</b>\n\n1️⃣ <a href="%s">Авторизоваться в LinkedIn</a>\n\n2️⃣ Скопируй <code>code=...</code> из URL и запусти <a href="%s">Refresh workflow</a>' "$AUTH_URL" "$REFRESH_URL")
 
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             --data-urlencode "text=$MESSAGE" \
