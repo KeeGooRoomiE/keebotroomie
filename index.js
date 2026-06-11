@@ -12,6 +12,7 @@ const LINKEDIN_PERSON_URN = process.env.LINKEDIN_PERSON_URN;
 const TARGET_CHANNEL_ID = process.env.TARGET_CHANNEL_ID;
 const REPO_URL = process.env.REPO_URL || 'https://github.com/your-username/your-repo';
 const STATE_FILE = 'last_message_id.txt';
+const UPDATE_ID_FILE = 'last_update_id.txt';
 
 /**
  * Helper to group logs in GitHub Actions
@@ -46,6 +47,18 @@ function getLastProcessedId() {
 
 function saveLastProcessedId(id) {
     fs.writeFileSync(STATE_FILE, id.toString());
+}
+
+function getLastUpdateId() {
+    if (fs.existsSync(UPDATE_ID_FILE)) {
+        const content = fs.readFileSync(UPDATE_ID_FILE, 'utf8').trim();
+        return content ? parseInt(content) : 0;
+    }
+    return 0;
+}
+
+function saveLastUpdateId(id) {
+    fs.writeFileSync(UPDATE_ID_FILE, id.toString());
 }
 
 /**
@@ -225,9 +238,14 @@ async function run() {
     console.log(`Last processed message ID from file: ${lastId}`);
 
     try {
-        // We use offset = lastId + 1 to get only NEW messages
-        const response = await axios.get(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=${lastId + 1}`);
+        const lastUpdateId = getLastUpdateId();
+        const response = await axios.get(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&limit=100`);
         const updates = response.data.result;
+
+        if (updates.length > 0) {
+            const maxUpdateId = Math.max(...updates.map(u => u.update_id));
+            saveLastUpdateId(maxUpdateId);
+        }
 
         if (updates.length === 0) {
             console.log('No new updates found.');

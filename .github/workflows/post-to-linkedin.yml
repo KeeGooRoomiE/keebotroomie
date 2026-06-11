@@ -17,14 +17,14 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Fetch all history for git push
 
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 22
 
       - name: Install dependencies
         run: npm install
@@ -56,12 +56,13 @@ jobs:
           git fetch origin
           git reset --hard origin/main
 
-          # Re-write our new ID on top of fresh remote state
+          # Re-write our new IDs on top of fresh remote state
           echo "$NEW_ID" > last_message_id.txt
           git add last_message_id.txt
+          [ -f last_update_id.txt ] && git add last_update_id.txt || true
 
           if git diff --staged --quiet; then
-            echo "No changes to last_message_id.txt"
+            echo "No changes to state files"
           else
             git commit -m "chore: update last processed message ID [skip ci]"
             git push --force
