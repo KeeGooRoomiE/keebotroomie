@@ -60,6 +60,7 @@ jobs:
           echo "$NEW_ID" > last_message_id.txt
           git add last_message_id.txt
           [ -f last_update_id.txt ] && git add last_update_id.txt || true
+          [ -f posts.txt ] && git add posts.txt || true
 
           if git diff --staged --quiet; then
             echo "No changes to state files"

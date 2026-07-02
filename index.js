@@ -13,6 +13,8 @@ const TARGET_CHANNEL_ID = process.env.TARGET_CHANNEL_ID;
 const REPO_URL = process.env.REPO_URL || 'https://github.com/your-username/your-repo';
 const STATE_FILE = 'last_message_id.txt';
 const UPDATE_ID_FILE = 'last_update_id.txt';
+const POSTS_FILE = 'posts.txt';
+const canSavePosts = true;
 
 /**
  * Helper to group logs in GitHub Actions
@@ -59,6 +61,12 @@ function getLastUpdateId() {
 
 function saveLastUpdateId(id) {
     fs.writeFileSync(UPDATE_ID_FILE, id.toString());
+}
+
+function appendPostHistory(tgLink, date, text) {
+    const timestamp = new Date(date * 1000).toISOString().replace('T', ' ').slice(0, 19);
+    const entry = `${tgLink} - ${timestamp}\n${text}\n\n`;
+    fs.appendFileSync(POSTS_FILE, entry, 'utf8');
 }
 
 /**
@@ -271,6 +279,7 @@ async function run() {
             if (!groups[groupId]) {
                 groups[groupId] = {
                     message_id: post.message_id,
+                    date: post.date,
                     text: getPostText(post),
                     photos: [],
                     chat_username: post.chat.username
@@ -335,6 +344,7 @@ async function run() {
                         const tgLink = group.chat_username ? `https://t.me/${group.chat_username}/${group.message_id}` : 'N/A';
                         const liLink = `https://www.linkedin.com/feed/update/urn:li:share:${linkedinPostUrn.split(':').pop()}`;
                         await sendAdminNotification(`✅ <b>Пост опубликован!</b>\n\n🔗 <a href="${tgLink}">Telegram</a>\n🔗 <a href="${liLink}">LinkedIn</a>`);
+                        if (canSavePosts) appendPostHistory(tgLink, group.date, group.text);
                     }
                     saveLastProcessedId(group.message_id);
                 } catch (err) {
