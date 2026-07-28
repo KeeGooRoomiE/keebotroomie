@@ -50,16 +50,22 @@ jobs:
           fi
 
           NEW_ID=$(cat last_message_id.txt)
-          echo "New state ID: $NEW_ID"
+          NEW_UPDATE_ID=$(cat last_update_id.txt 2>/dev/null || echo "0")
+          echo "New state: message_id=$NEW_ID update_id=$NEW_UPDATE_ID"
+
+          # Save posts.txt to temp before reset (may contain multiline content)
+          cp posts.txt /tmp/posts_new.txt 2>/dev/null || true
 
           # Pull latest remote state BEFORE committing to avoid conflicts
           git fetch origin
           git reset --hard origin/main
 
-          # Re-write our new IDs on top of fresh remote state
+          # Re-write our new state on top of fresh remote
           echo "$NEW_ID" > last_message_id.txt
-          git add last_message_id.txt
-          [ -f last_update_id.txt ] && git add last_update_id.txt || true
+          echo "$NEW_UPDATE_ID" > last_update_id.txt
+          [ -f /tmp/posts_new.txt ] && cp /tmp/posts_new.txt posts.txt || true
+
+          git add last_message_id.txt last_update_id.txt
           [ -f posts.txt ] && git add posts.txt || true
 
           if git diff --staged --quiet; then

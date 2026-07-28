@@ -15,6 +15,7 @@ const STATE_FILE = 'last_message_id.txt';
 const UPDATE_ID_FILE = 'last_update_id.txt';
 const POSTS_FILE = 'posts.txt';
 const canSavePosts = true;
+const dryRun = false; // true = only log to posts.txt, skip LinkedIn posting
 
 /**
  * Helper to group logs in GitHub Actions
@@ -328,6 +329,15 @@ async function run() {
                     return;
                 }
 
+                const tgLink = group.chat_username ? `https://t.me/${group.chat_username}/${group.message_id}` : 'N/A';
+                if (canSavePosts) appendPostHistory(tgLink, group.date, group.text);
+
+                if (dryRun) {
+                    console.log(`[DRY RUN] Skipping LinkedIn post for message ${group.message_id}`);
+                    saveLastProcessedId(group.message_id);
+                    return;
+                }
+
                 try {
                     const assetUrns = [];
                     for (const fileId of group.photos) {
@@ -341,10 +351,8 @@ async function run() {
 
                     const linkedinPostUrn = await createLinkedInPost(group.text, assetUrns);
                     if (linkedinPostUrn !== 'DUPLICATE') {
-                        const tgLink = group.chat_username ? `https://t.me/${group.chat_username}/${group.message_id}` : 'N/A';
                         const liLink = `https://www.linkedin.com/feed/update/urn:li:share:${linkedinPostUrn.split(':').pop()}`;
                         await sendAdminNotification(`✅ <b>Пост опубликован!</b>\n\n🔗 <a href="${tgLink}">Telegram</a>\n🔗 <a href="${liLink}">LinkedIn</a>`);
-                        if (canSavePosts) appendPostHistory(tgLink, group.date, group.text);
                     }
                     saveLastProcessedId(group.message_id);
                 } catch (err) {

@@ -2,3 +2,5 @@
 .env
 .DS_Store
 .claude/
+.backfill-session
+backfill-posts.js
