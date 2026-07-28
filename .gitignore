@@ -4,3 +4,4 @@
 .claude/
 .backfill-session
 backfill-posts.js
+scrape-posts.js
