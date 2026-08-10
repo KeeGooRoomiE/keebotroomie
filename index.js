@@ -231,7 +231,7 @@ async function checkLinkedInToken() {
         return true;
     } catch (error) {
         if (error.response && (error.response.status === 401 || error.response.status === 403)) {
-            await sendAdminNotification(`⚠️ <b>LinkedIn Token Expired!</b>\n\nRepo: ${REPO_URL}`);
+            await sendAdminNotification(`⚠️ <b>LinkedIn Token Expired!</b>\n\n<a href="${REPO_URL}/actions/workflows/linkedin-token-monitor.yml">Запустить обновление токена</a>`);
             return false;
         }
         throw error;
