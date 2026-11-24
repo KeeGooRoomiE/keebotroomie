@@ -5572,3 +5572,12 @@ https://t.me/keegooroomie/557 - 2026-11-23 04:54:30
 
 🤖  huggingface.co/spaces/darkc0de/chat
 
+https://t.me/keegooroomie/558 - 2026-11-24 04:52:01
+Просторы Hugging Face продолжаются
+
+Добро пожаловать, диффузионка, что умеет в пиксельарт - Tessera
+
+🦄 https://huggingface.co/spaces/thejagstudio/tessera-pixel-studio
+
+Что тут еще сказать, более-менее адекватные пиксель арт изображения в фиксированном 16х16 генерируют на лету в 4 вариантах и, по сути, неограниченно.
+
